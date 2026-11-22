@@ -1,3 +1,4 @@
+
 name: Gerar instalador Windows
 
 on:
@@ -8,48 +9,197 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Organizar estrutura (caso o upload tenha achatado as pastas)
+    steps:
+      # 1. Baixar repositório
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # 2. Reconstruir estrutura do projeto
+      - name: Organizar estrutura do projeto
         shell: pwsh
         run: |
+
           function Mover($nome, $destino) {
-            if ((Test-Path $nome) -and -not (Test-Path (Join-Path $destino $nome))) {
+            $origem = $nome
+            $arquivoDestino = Join-Path $destino $nome
+
+            if (Test-Path $origem) {
               New-Item -ItemType Directory -Force -Path $destino | Out-Null
-              Move-Item $nome (Join-Path $destino $nome)
+
+              if (-not (Test-Path $arquivoDestino)) {
+                Move-Item -Path $origem -Destination $arquivoDestino
+                Write-Host "Movido: $origem -> $arquivoDestino"
+              }
             }
           }
-          'Cargo.toml','build.rs','tauri.conf.json' | ForEach-Object { Mover $_ 'src-tauri' }
+
+          # =====================================
+          # TAURI
+          # =====================================
+
+          'Cargo.toml',
+          'build.rs',
+          'tauri.conf.json' | ForEach-Object {
+            Mover $_ 'src-tauri'
+          }
+
           Mover 'default.json' 'src-tauri/capabilities'
-          'lib.rs','main.rs' | ForEach-Object { Mover $_ 'src-tauri/src' }
-          'config.ts','estado.ts','voz.ts','saude.ts','acoes.ts','spotify.ts','ia.ts','reconhecimento.ts','orquestrador.ts','overlay.ts','midia.ts','atalho.ts' | ForEach-Object { Mover $_ 'src/core' }
+
+          'lib.rs','main.rs' | ForEach-Object {
+            Mover $_ 'src-tauri/src'
+          }
+
+          # =====================================
+          # CORE
+          # =====================================
+
+          $arquivosCore = @(
+            'config.ts',
+            'preferencias.ts',
+            'estado.ts',
+            'voz.ts',
+            'saude.ts',
+            'acoes.ts',
+            'spotify.ts',
+            'spotify-vinculo.ts',
+            'ia.ts',
+            'reconhecimento.ts',
+            'orquestrador.ts',
+            'overlay.ts',
+            'midia.ts',
+            'atalho.ts',
+            'arquivos.ts',
+            'letras.ts',
+            'capa.ts'
+          )
+
+          foreach ($arquivo in $arquivosCore) {
+            Mover $arquivo 'src/core'
+          }
+
+          # =====================================
+          # INTERFACE REACT
+          # =====================================
+
+          $arquivosUI = @(
+            'App.tsx',
+            'montar.tsx',
+            'Mascote.tsx',
+            'Tempo.tsx',
+            'index.css'
+          )
+
+          foreach ($arquivo in $arquivosUI) {
+            Mover $arquivo 'src/ui'
+          }
+
+          # =====================================
+          # ENTRADAS PRINCIPAIS
+          # =====================================
+
           Mover 'main.ts' 'src'
           Mover 'welcome.ts' 'src'
-          Get-ChildItem -Recurse -File -Exclude node_modules | Where-Object { $_.FullName -notmatch 'node_modules|\.git\\' } | ForEach-Object { $_.FullName }
 
-      - uses: actions/setup-node@v4
+          # =====================================
+          # VALIDAR ESTRUTURA
+          # =====================================
+
+          $obrigatorios = @(
+            'src/main.ts',
+            'src/ui/montar.tsx',
+            'src/ui/App.tsx',
+            'src/ui/Mascote.tsx',
+            'src/ui/Tempo.tsx',
+            'src/ui/index.css',
+            'src/core/config.ts',
+            'src/core/preferencias.ts',
+            'src/core/estado.ts',
+            'src/core/ia.ts',
+            'src/core/orquestrador.ts',
+            'src/core/atalho.ts',
+            'src/core/overlay.ts',
+            'src/core/midia.ts',
+            'src-tauri/Cargo.toml',
+            'src-tauri/build.rs',
+            'src-tauri/tauri.conf.json',
+            'index.html',
+            'welcome.html',
+            'package.json',
+            'app-icon.png'
+          )
+
+          $faltando = @()
+
+          foreach ($arquivo in $obrigatorios) {
+            if (Test-Path $arquivo) {
+              Write-Host "OK: $arquivo"
+            }
+            else {
+              Write-Host "AUSENTE: $arquivo"
+              $faltando += $arquivo
+            }
+          }
+
+          if ($faltando.Count -gt 0) {
+            throw "Build interrompido: arquivos obrigatórios ausentes."
+          }
+
+          Write-Host "Estrutura validada!"
+
+      # 3. Node.js
+      - name: Configurar Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
+
+      # 4. Rust
+      - name: Configurar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 5. Cache Rust
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - run: npm install
-      - run: npx tauri icon app-icon.png
-      - name: Compilar (.env a partir dos Secrets)
+
+      # 6. Instalar dependências
+      - name: Instalar dependências
+        run: npm install
+
+      # 7. Gerar ícones
+      - name: Gerar ícones
+        run: npx tauri icon app-icon.png
+
+      # 8. Configurar variáveis de ambiente
+      - name: Configurar ambiente
         shell: pwsh
+        env:
+          VITE_NOME_ASSISTENTE: ${{ secrets.VITE_NOME_ASSISTENTE }}
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          VITE_GEMINI_MODEL: ${{ secrets.VITE_GEMINI_MODEL }}
+          VITE_SPOTIFY_CLIENT_ID: ${{ secrets.VITE_SPOTIFY_CLIENT_ID }}
+          VITE_SPOTIFY_REFRESH_TOKEN: ${{ secrets.VITE_SPOTIFY_REFRESH_TOKEN }}
+          VITE_CHAVE_PIX: ${{ secrets.VITE_CHAVE_PIX }}
         run: |
           @"
-          VITE_NOME_ASSISTENTE=${{ secrets.VITE_NOME_ASSISTENTE }}
-          VITE_GEMINI_API_KEY=${{ secrets.VITE_GEMINI_API_KEY }}
-          VITE_GEMINI_MODEL=${{ secrets.VITE_GEMINI_MODEL }}
-          VITE_SPOTIFY_CLIENT_ID=${{ secrets.VITE_SPOTIFY_CLIENT_ID }}
-          VITE_SPOTIFY_REFRESH_TOKEN=${{ secrets.VITE_SPOTIFY_REFRESH_TOKEN }}
-          VITE_CHAVE_PIX=${{ secrets.VITE_CHAVE_PIX }}
-          "@ | Set-Content .env
-          npm run tauri build
-      - uses: actions/upload-artifact@v4
+          VITE_NOME_ASSISTENTE=$env:VITE_NOME_ASSISTENTE
+          VITE_GEMINI_API_KEY=$env:VITE_GEMINI_API_KEY
+          VITE_GEMINI_MODEL=$env:VITE_GEMINI_MODEL
+          VITE_SPOTIFY_CLIENT_ID=$env:VITE_SPOTIFY_CLIENT_ID
+          VITE_SPOTIFY_REFRESH_TOKEN=$env:VITE_SPOTIFY_REFRESH_TOKEN
+          VITE_CHAVE_PIX=$env:VITE_CHAVE_PIX
+          "@ | Set-Content -Path .env -Encoding utf8
+
+      # 9. Compilar
+      - name: Compilar Aura
+        run: npm run tauri build
+
+      # 10. Publicar instalador
+      - name: Disponibilizar instalador
+        uses: actions/upload-artifact@v4
         with:
           name: Aura-instalador
           path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
